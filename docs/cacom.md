@@ -91,8 +91,8 @@ python src/main.py --config=cacom --env-config=mpe with seed=0 'obs_segs=[[1,2],
 ```
 
 SMAC 可追加 `runner=parallel batch_size_run=8` 使用现有并行 runner（本次未实测并行 SMAC）。
-本仓库现有 `run.py` 会把 MPE 强制设置为 episode runner 和 batch_size_run=1；
-本次保留该行为。
+无延迟 `mpe` 使用算法配置中的 runner；`delayed_mpe` 会改用 delayed runner 以便把
+train/eval 模式传到观测延迟封装。
 观测时延沿用 BasicMAC/ObservationDelayModel：
 `obs_delay_enabled=True obs_delay_apply_train=True obs_delay_apply_test=True obs_gaussian_delay_mean=1`。
 也可沿用仓库现有 delayed 环境/runner，但不要无意中同时打开两层观测时延。
@@ -114,8 +114,7 @@ python -m unittest discover -s tests -p test_cacom.py -v
 
 本次在 Windows 上 7 项测试全部通过（包括 CUDA 和原作者数值对照）。
 真实 MPE episode runner 完成 35 个环境步，并验证评估和模型保存；
-打开固定 1 步观测时延后完成 20 个环境步。此次尝试的 MPE parallel 配置被现有
-run.py 自动回退到 episode，不能作为并行环境验证。
+打开固定 1 步观测时延后完成 20 个环境步。
 真实 SMAC `3m` 自动观测分段、训练、gate 更新、评估、保存链路通过，
 累计 113 个环境步、3 个训练回合（t_max=65，按完整回合结束）。
 SMACv2 只验证了元数据格式解析，未启动真实 SMACv2 地图。

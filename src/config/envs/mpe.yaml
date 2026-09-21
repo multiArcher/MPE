@@ -1,19 +1,20 @@
-env: "mpe"
+env: mpe
 common_reward: True
-reward_scalarisation: "mean" # Match VIL2C-Branch; averages all controlled roles.
+reward_scalarisation: sum
 
 env_args:
-  scenario: "simple_spread_v3"
-  map_name: null # VIL2C alias; when set, overrides scenario.
+  map_name: simple_spread_v3
+  scenario: null  # Alias of map_name. If set (including via CLI), it selects the map.
+  bootstrap_at_timeout: False  # True restores VIL2C Q-bootstrap; explodes QMIX on MPE.
   time_limit: 25
   seed: null
   render_mode: null
-  scenario_args: {} # Set max_cycles through time_limit, not here.
+  scenario_args: {}
 
 test_greedy: True
 test_nepisode: 32
-test_interval: 50000
-log_interval: 50000
+test_interval: 10000
+log_interval: 10000
 runner_log_interval: 10000
 learner_log_interval: 10000
-t_max: 2050000
+t_max: 2000000

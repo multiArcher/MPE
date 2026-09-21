@@ -7,6 +7,19 @@ class EnvMaker(Maker):
     """Factory class for creating environments."""
 
     @staticmethod
+    def make_mpe(*args, **kwargs) -> MultiAgentEnv:
+        from envs.mpe_wrapper import MPEWrapper
+
+        return MPEWrapper(*args, **kwargs)
+
+    @staticmethod
+    def make_delayed_mpe(*args, **kwargs) -> MultiAgentEnv:
+        from envs.wrappers import DelayedObservationWrapper
+
+        delay_kwargs = EnvMaker._pop_delay_kwargs(kwargs)
+        return DelayedObservationWrapper(EnvMaker.make_mpe(*args, **kwargs), **delay_kwargs)
+
+    @staticmethod
     def _check_and_prepare_smac_kwargs(kwargs):
         """Check and prepare kwargs for SMAC environments."""
         assert "common_reward" in kwargs and "reward_scalarisation" in kwargs
@@ -83,22 +96,5 @@ class EnvMaker(Maker):
         # "delay" (the legacy fixed-delay scalar) is dropped: a fixed delay d is N(d, 0).
         kwargs.pop("delay", None)
         return delay_kwargs
-
-    @staticmethod
-    def make_mpe(*args, **kwargs) -> MultiAgentEnv:
-        from envs.mpe import MPEEnv
-
-        assert "common_reward" in kwargs and "reward_scalarisation" in kwargs
-        return MPEEnv(*args, **kwargs)
-
-    @staticmethod
-    def make_delayed_mpe(*args, **kwargs) -> MultiAgentEnv:
-        from envs.mpe import MPEEnv
-        from envs.wrappers import DelayedObservationWrapper
-
-        assert "common_reward" in kwargs and "reward_scalarisation" in kwargs
-        delay_kwargs = EnvMaker._pop_delay_kwargs(kwargs)
-        env = MPEEnv(*args, **kwargs)
-        return DelayedObservationWrapper(env, **delay_kwargs)
 
 

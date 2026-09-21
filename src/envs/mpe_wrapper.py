@@ -1,15 +1,11 @@
-"""MPE2 adapter matching VIL2C-Branch MPEWrapper semantics.
+"""MPE2 Parallel API adapter for the framework's discrete MultiAgentEnv API.
 
-All roles are controlled; common rewards aggregate all roles. State concatenates
-padded observations, and time limits bootstrap via info["episode_limit"].
-Local extensions: scenario alias, tensor actions, delay clock, pygame safeguards.
+Ported from VIL2C-Branch `MPEWrapper`. Episode-runner actions may arrive as
+tensors; they are converted to numpy before the original discrete checks.
 """
 
 import importlib
 import re
-import os
-import signal
-import torch
 
 import numpy as np
 from gymnasium.spaces import Discrete
@@ -17,47 +13,17 @@ from gymnasium.spaces import Discrete
 from .multiagentenv import MultiAgentEnv
 
 
-# Scenarios covered by regression tests; loading accepts valid MPE2 module names.
-_ALLOWED_SCENARIOS = {
-    "simple_v3", "simple_spread_v3", "simple_tag_v3", "simple_adversary_v3",
-    "simple_crypto_v3", "simple_push_v3", "simple_reference_v3",
-    "simple_speaker_listener_v4", "simple_world_comm_v3",
-}
-
-_CRASH_SIGNALS = ("SIGSEGV", "SIGBUS", "SIGFPE", "SIGABRT")
-
-
-def _restore_default_crash_signals():
-    for name in _CRASH_SIGNALS:
-        sig = getattr(signal, name, None)
-        if sig is None:
-            continue
-        try:
-            signal.signal(sig, signal.SIG_DFL)
-        except (ValueError, OSError):
-            pass
-
-
-def _disable_torch_dynamo():
-    try:
-        torch._dynamo.config.disable = True
-    except Exception:
-        pass
-
-
-class MPEEnv(MultiAgentEnv):
+class MPEWrapper(MultiAgentEnv):
     def __init__(
-        self, scenario=None, time_limit=25, seed=None,
-        common_reward=True, reward_scalarisation="mean", scenario_args=None,
-        render_mode=None, args=None, map_name=None,
+        self, map_name="simple_spread_v3", time_limit=25, seed=None,
+        common_reward=True, reward_scalarisation="sum", scenario_args=None,
+        render_mode=None, args=None, scenario=None, bootstrap_at_timeout=False,
         # These SMAC defaults are merged into every environment by main.py.
         window_size_x=None, window_size_y=None, state_timestep_number=False,
     ):
-        # Keep existing scenario= launchers; map_name is the VIL2C spelling.
-        map_name = map_name if map_name is not None else (scenario or "simple_spread_v3")
-        self.scenario = map_name
-        os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
-        os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
+        # env_args.scenario is an alias used by launchers; if set it selects the map.
+        if scenario is not None:
+            map_name = scenario
         if not re.fullmatch(r"[a-z][a-z0-9_]*_v\d+", map_name):
             raise ValueError("Use an MPE2 module name, e.g. simple_spread_v3")
         if int(time_limit) != time_limit or time_limit <= 0:
@@ -75,21 +41,18 @@ class MPEEnv(MultiAgentEnv):
             module = importlib.import_module(f"mpe2.{map_name}")
         except ModuleNotFoundError as exc:
             if exc.name == "mpe2":
-                raise ImportError("MPE requires MPE2: pip install mpe2") from exc
+                raise ImportError("MPE requires MPE2: pip install -r mpe_requirements.txt") from exc
             raise
         self._env = module.parallel_env(
             max_cycles=int(time_limit), continuous_actions=False,
             render_mode=render_mode, **scenario_args,
         )
-        _restore_default_crash_signals()
-        _disable_torch_dynamo()
-        self._episode_t = 0
         self.agents = tuple(self._env.possible_agents)
-        self.agent_ids = list(self.agents)
         self.n_agents = len(self.agents)
         self.episode_limit = int(time_limit)
         self.common_reward = common_reward
         self.reward_scalarisation = reward_scalarisation
+        self.bootstrap_at_timeout = bool(bootstrap_at_timeout)
         self._pending_seed = seed
         spaces = [self._env.action_space(a) for a in self.agents]
         if not all(isinstance(space, Discrete) and space.start == 0 for space in spaces):
@@ -112,12 +75,11 @@ class MPEEnv(MultiAgentEnv):
             seed=self._pending_seed if seed is None else seed, options=options,
         )
         self._pending_seed = None
-        self._episode_t = 0
         self._set_obs(obs)
         return self.get_obs(), info
 
     def step(self, actions):
-        if torch.is_tensor(actions):
+        if hasattr(actions, "detach"):
             actions = actions.detach().cpu().numpy()
         actions = np.asarray(actions).reshape(-1)
         if not self._env.agents:
@@ -131,7 +93,6 @@ class MPEEnv(MultiAgentEnv):
                 raise ValueError(f"Invalid action {action} for {agent} (Discrete({size}))")
             action_dict[agent] = value
         obs, rewards, terminations, truncations, _ = self._env.step(action_dict)
-        self._episode_t += 1
         self._set_obs(obs)
         terminated = all(terminations[a] for a in self.agents)
         ended = all(terminations[a] or truncations[a] for a in self.agents)
@@ -141,8 +102,14 @@ class MPEEnv(MultiAgentEnv):
         reward = np.asarray([rewards[a] for a in self.agents], dtype=np.float32)
         if self.common_reward:
             reward = float(reward.sum() if self.reward_scalarisation == "sum" else reward.mean())
-        # Runners use this flag to bootstrap time-limit transitions.
-        return self.get_obs(), reward, terminated, truncated, {"episode_limit": truncated}
+        # MPE is a finite-horizon task: the time limit ends the episode.
+        # Setting info["episode_limit"]=True makes PyMARL bootstrap Q(s_{T+1}).
+        # That is correct for cut-off continuing tasks such as SMAC, but on MPE
+        # every episode times out, so value-based methods (QMIX) explode.
+        # Default matches gymma: timeout is terminal. Pass bootstrap_at_timeout=True
+        # only if you explicitly want the VIL2C truncation bootstrap.
+        info = {"episode_limit": True} if (truncated and self.bootstrap_at_timeout) else {}
+        return self.get_obs(), reward, terminated, truncated, info
 
     def get_obs(self):
         return [obs.copy() for obs in self._obs]
@@ -168,11 +135,6 @@ class MPEEnv(MultiAgentEnv):
 
     def get_total_actions(self):
         return self._n_actions
-
-    @property
-    def episode_timestep(self):
-        """Clock used by the local delayed-observation wrapper."""
-        return self._episode_t
 
     def seed(self, seed=None):
         self._pending_seed = seed
