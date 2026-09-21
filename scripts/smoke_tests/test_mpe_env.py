@@ -62,7 +62,7 @@ def test_mpe_shapes():
         if terminated or truncated:
             break
     assert truncated and not terminated
-    assert "episode_limit" not in step_info
+    assert step_info["episode_limit"] is True
 
     env.close()
     print("mpe simple_spread_v3 shape checks passed", info)

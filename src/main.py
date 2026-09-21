@@ -152,6 +152,14 @@ if __name__ == "__main__":
     config_dict = recursive_dict_update(config_dict, env_config)
     config_dict = recursive_dict_update(config_dict, alg_config)
 
+    # Sacred rejects new nested keys unless registered before add_config.
+    if config_dict.get("env") in {"mpe", "delayed_mpe"}:
+        scenario_args = config_dict["env_args"].setdefault("scenario_args", {})
+        for param in params:
+            if param.startswith("env_args.scenario_args.") and "=" in param:
+                key, value = param.split("=", 1)
+                scenario_args[key.removeprefix("env_args.scenario_args.")] = yaml.safe_load(value)
+
     # endregion
 
     # Generate unique token.
@@ -174,7 +182,7 @@ if __name__ == "__main__":
             map_name = param.split("=")[1]
         elif param.startswith("env_args.key"):
             map_name = param.split("=")[1]
-        elif param.startswith("env_args.scenario"):
+        elif param.startswith("env_args.scenario="):
             map_name = param.split("=")[1]
         elif param.startswith("name"):
             experiment_name = param.split("=")[1]

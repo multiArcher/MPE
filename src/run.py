@@ -390,25 +390,24 @@ def args_sanity_check(config, logger):
             "CUDA flag use_cuda was switched OFF automatically because no CUDA device is available!"
         )
 
-    # MPE episodes are short vector tasks; kernel_qmix's SMAC parallel worker
-    # settings are the wrong default and collide with pygame.
-    if config.get("env") == "mpe":
-        if config.get("runner") != "episode":
-            logger.warning(
-                "MPE forces runner=episode and batch_size_run=1 "
-                f"(was runner={config.get('runner')}, "
-                f"batch_size_run={config.get('batch_size_run')})."
-            )
-        config["runner"] = "episode"
-        config["batch_size_run"] = 1
-    elif config.get("env") == "delayed_mpe":
-        if config.get("runner") != "delayed_episode":
-            logger.warning(
-                "delayed_mpe forces runner=delayed_episode and batch_size_run=1 "
-                f"(was runner={config.get('runner')}, "
-                f"batch_size_run={config.get('batch_size_run')})."
-            )
-        config["runner"] = "delayed_episode"
+    # Preserve the requested MPE parallelism while selecting the runner variant
+    # that matches whether the environment exposes delayed observations.
+    env_name = config.get("env")
+    runner_name = config.get("runner")
+    if env_name == "mpe":
+        runner_mapping = {
+            "delayed_episode": "episode",
+            "delayed_parallel": "parallel",
+        }
+        config["runner"] = runner_mapping.get(runner_name, runner_name)
+    elif env_name == "delayed_mpe":
+        runner_mapping = {
+            "episode": "delayed_episode",
+            "parallel": "delayed_parallel",
+        }
+        config["runner"] = runner_mapping.get(runner_name, runner_name)
+
+    if config.get("runner") in {"episode", "delayed_episode"}:
         config["batch_size_run"] = 1
 
     # Adjust batch_size_run and test_nepisode to be divisible by batch_size_run.

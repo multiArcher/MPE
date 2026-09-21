@@ -1,9 +1,14 @@
 env: "mpe"
+common_reward: True
+reward_scalarisation: "mean" # Match VIL2C-Branch; averages all controlled roles.
 
 env_args:
   scenario: "simple_spread_v3"
+  map_name: null # VIL2C alias; when set, overrides scenario.
   time_limit: 25
   seed: null
+  render_mode: null
+  scenario_args: {} # Set max_cycles through time_limit, not here.
 
 test_greedy: True
 test_nepisode: 32

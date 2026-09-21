@@ -128,7 +128,47 @@ RWARE:
 python src/main.py --config=qmix --env-config=gymma with env_args.time_limit=500 env_args.key="rware:rware-tiny-2ag-v2"
 ```
 
-MPE:
+MPE2 (native `mpe` / `delayed_mpe` adapter):
+```sh
+python src/main.py --config=qmix --env-config=mpe with env_args.scenario=simple_spread_v3 env_args.scenario_args.N=5
+```
+Supported discrete scenarios: `simple_v3`, `simple_spread_v3`, `simple_tag_v3`,
+`simple_adversary_v3`, `simple_crypto_v3`, `simple_push_v3`, `simple_reference_v3`,
+`simple_speaker_listener_v4`, and `simple_world_comm_v3`. Install `mpe2`.
+Pass scenario constructor options through `env_args.scenario_args`; set the horizon
+using `env_args.time_limit` and rendering using `env_args.render_mode`. Passing
+`max_cycles` or `render_mode` inside `scenario_args` is rejected, as in VIL2C-Branch.
+`env_args.map_name` is also accepted and takes precedence over `env_args.scenario`.
+Observations are padded to the largest role's size, and
+action masks preserve each role's discrete action space. Continuous actions are unsupported.
+
+The adapter follows VIL2C-Branch's `MPEWrapper`: state concatenates padded agent
+observations (default spread: 54 dimensions; default tag: 64), constructor seeds
+are consumed by the first reset, and time-limit transitions return
+`info["episode_limit"]=True` so the learners bootstrap. Both native MPE configs
+default to `common_reward=True` and `reward_scalarisation=mean`. They retain spread
+as the default scenario; select tag explicitly. Earlier runs used sum by default
+and did not bootstrap at time limits. Keep those results labeled separately;
+retrain for comparisons under the aligned VIL2C training semantics. A sum-to-mean
+change alone divides episode return by the number of agents for a fixed trajectory,
+but rescaling old returns cannot correct the changed training target.
+
+For example, this command checks the tag training pipeline:
+```sh
+python src/main.py --config=qmix --env-config=mpe with env_args.scenario=simple_tag_v3 env_args.scenario_args.num_good=1 env_args.scenario_args.num_adversaries=3 runner=episode batch_size_run=1 batch_size=2 buffer_size=4 env_args.time_limit=4 t_max=12 test_nepisode=2 use_cuda=False device=cpu use_tensorboard=False save_model=False
+```
+**Adversarial-task semantics:** this adapter controls all roles, including prey.
+With `common_reward=True`, `reward_scalarisation=sum` or `mean` aggregates rewards
+over all roles. This is not cooperative predator-team training against a fixed prey
+policy; opposing objectives can cancel or distort the training reward. Using
+`common_reward=False` preserves individual rewards but requires a learner supporting
+general-sum rewards (not QMIX). The legacy pretrained wrappers below belong to
+`gymma` and are not connected to the native MPE2 adapter.
+Use `--env-config=delayed_mpe` with the same scenario options for delayed observations.
+Old runs made before the scenario-loader fix actually used spread even if their
+configuration or directory name said tag; their checkpoints are not tag checkpoints.
+
+Legacy Gymma MPE:
 ```sh
 python src/main.py --config=qmix --env-config=gymma with env_args.time_limit=25 env_args.key="pz-mpe-simple-spread-v3"
 ```

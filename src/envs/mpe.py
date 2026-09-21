@@ -1,23 +1,29 @@
-"""simple_spread_v3 (mpe2) → EPyMARL MultiAgentEnv.
+"""MPE2 adapter matching VIL2C-Branch MPEWrapper semantics.
 
-First-wave MPE support: three cooperative agents, vector obs, discrete
-actions. Gymnasium registration and other PettingZoo families are out of
-scope. pygame's crash parachute is uninstalled after import so later CUDA
-optimizer setup is not intercepted.
+All roles are controlled; common rewards aggregate all roles. State concatenates
+padded observations, and time limits bootstrap via info["episode_limit"].
+Local extensions: scenario alias, tensor actions, delay clock, pygame safeguards.
 """
 
-from collections.abc import Mapping
+import importlib
+import re
 import os
 import signal
-import warnings
+import torch
 
 import numpy as np
-import torch
 from gymnasium.spaces import Discrete
 
 from .multiagentenv import MultiAgentEnv
 
-_ALLOWED_SCENARIOS = {"simple_spread_v3"}
+
+# Scenarios covered by regression tests; loading accepts valid MPE2 module names.
+_ALLOWED_SCENARIOS = {
+    "simple_v3", "simple_spread_v3", "simple_tag_v3", "simple_adversary_v3",
+    "simple_crypto_v3", "simple_push_v3", "simple_reference_v3",
+    "simple_speaker_listener_v4", "simple_world_comm_v3",
+}
+
 _CRASH_SIGNALS = ("SIGSEGV", "SIGBUS", "SIGFPE", "SIGABRT")
 
 
@@ -39,250 +45,144 @@ def _disable_torch_dynamo():
         pass
 
 
-def _space_of(env, kind, agent):
-    getter = getattr(env, f"{kind}_space", None)
-    if callable(getter):
-        return getter(agent)
-    spaces = getattr(env, f"{kind}_spaces", None)
-    if isinstance(spaces, Mapping) and agent in spaces:
-        return spaces[agent]
-    raise AttributeError(f"MPE env has no {kind} space for {agent!r}")
-
-
-def _discrete_n(space):
-    if not isinstance(space, Discrete):
-        raise TypeError(f"MPEEnv expects Discrete actions, got {type(space)!r}")
-    return int(space.n)
-
-
-def _load_simple_spread(max_cycles):
-    os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
-    os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
-    try:
-        from mpe2 import simple_spread_v3
-    except ImportError as exc:
-        raise ImportError(
-            "MPE simple_spread requires the mpe2 package. Install with `pip install mpe2`."
-        ) from exc
-    env = simple_spread_v3.parallel_env(max_cycles=int(max_cycles))
-    _restore_default_crash_signals()
-    _disable_torch_dynamo()
-    return env
-
-
 class MPEEnv(MultiAgentEnv):
     def __init__(
-        self,
-        scenario,
-        time_limit,
-        seed,
-        common_reward,
-        reward_scalarisation,
-        **kwargs,
+        self, scenario=None, time_limit=25, seed=None,
+        common_reward=True, reward_scalarisation="mean", scenario_args=None,
+        render_mode=None, args=None, map_name=None,
+        # These SMAC defaults are merged into every environment by main.py.
+        window_size_x=None, window_size_y=None, state_timestep_number=False,
     ):
-        kwargs.pop("args", None)
-        del kwargs
-
-        scenario = str(scenario)
-        if scenario not in _ALLOWED_SCENARIOS:
-            raise ValueError(
-                f"Unsupported MPE scenario {scenario!r}. "
-                f"This build only supports {sorted(_ALLOWED_SCENARIOS)}."
-            )
-
-        self.scenario = scenario
-        self.episode_limit = int(time_limit)
-        self._seed = seed
-        self._env = _load_simple_spread(self.episode_limit)
-
-        reset_kwargs = {}
-        if seed is not None:
-            reset_kwargs["seed"] = int(seed)
-        boot_obs, _ = self._env.reset(**reset_kwargs)
-
-        self.agent_ids = list(self._env.possible_agents)
-        if not self.agent_ids:
-            raise RuntimeError("simple_spread_v3 has no possible_agents")
-        self.n_agents = len(self.agent_ids)
-
-        self._action_n = {
-            agent: _discrete_n(_space_of(self._env, "action", agent))
-            for agent in self.agent_ids
-        }
-        self._n_actions = max(self._action_n.values())
-        sample_obs = np.asarray(boot_obs[self.agent_ids[0]], dtype=np.float32).reshape(-1)
-        self._obs_size = int(sample_obs.shape[0])
-
-        self.common_reward = common_reward
-        if self.common_reward:
-            if reward_scalarisation == "sum":
-                self._agg = lambda rewards: float(np.sum(rewards))
-            elif reward_scalarisation == "mean":
-                self._agg = lambda rewards: float(np.mean(rewards))
-            else:
-                raise ValueError(
-                    f"Invalid reward_scalarisation: {reward_scalarisation} "
-                    "(only support 'sum' or 'mean')"
-                )
-        else:
-            self._agg = None
-
+        # Keep existing scenario= launchers; map_name is the VIL2C spelling.
+        map_name = map_name if map_name is not None else (scenario or "simple_spread_v3")
+        self.scenario = map_name
+        os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+        os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
+        if not re.fullmatch(r"[a-z][a-z0-9_]*_v\d+", map_name):
+            raise ValueError("Use an MPE2 module name, e.g. simple_spread_v3")
+        if int(time_limit) != time_limit or time_limit <= 0:
+            raise ValueError("time_limit must be a positive integer")
+        if reward_scalarisation not in ("sum", "mean"):
+            raise ValueError("reward_scalarisation must be 'sum' or 'mean'")
+        if state_timestep_number:
+            raise ValueError("MPE does not support state_timestep_number")
+        scenario_args = dict(scenario_args or {})
+        if scenario_args.pop("continuous_actions", False):
+            raise ValueError("MPEWrapper requires discrete actions")
+        if "max_cycles" in scenario_args or "render_mode" in scenario_args:
+            raise ValueError("Set time_limit and render_mode in env_args, not scenario_args")
+        try:
+            module = importlib.import_module(f"mpe2.{map_name}")
+        except ModuleNotFoundError as exc:
+            if exc.name == "mpe2":
+                raise ImportError("MPE requires MPE2: pip install mpe2") from exc
+            raise
+        self._env = module.parallel_env(
+            max_cycles=int(time_limit), continuous_actions=False,
+            render_mode=render_mode, **scenario_args,
+        )
+        _restore_default_crash_signals()
+        _disable_torch_dynamo()
         self._episode_t = 0
+        self.agents = tuple(self._env.possible_agents)
+        self.agent_ids = list(self.agents)
+        self.n_agents = len(self.agents)
+        self.episode_limit = int(time_limit)
+        self.common_reward = common_reward
+        self.reward_scalarisation = reward_scalarisation
+        self._pending_seed = seed
+        spaces = [self._env.action_space(a) for a in self.agents]
+        if not all(isinstance(space, Discrete) and space.start == 0 for space in spaces):
+            self._env.close()
+            raise ValueError("MPEWrapper requires zero-based Discrete action spaces")
+        self._action_sizes = [space.n for space in spaces]
+        self._n_actions = max(self._action_sizes)
+        self._obs_size = max(int(np.prod(self._env.observation_space(a).shape)) for a in self.agents)
+        self._obs = None
+
+    def _set_obs(self, observations):
+        # possible_agents is stable even when env.agents becomes empty at timeout.
         self._obs = []
-        self._state = None
-        self._cache(boot_obs)
-        self._state_size = int(self._state.shape[0])
+        for agent in self.agents:
+            obs = np.asarray(observations[agent], dtype=np.float32).reshape(-1)
+            self._obs.append(np.pad(obs, (0, self._obs_size - obs.size)))
 
-    def _obs_list(self, observations):
-        out = []
-        for agent in self.agent_ids:
-            if agent in observations:
-                vec = np.asarray(observations[agent], dtype=np.float32).reshape(-1)
-            else:
-                vec = np.zeros(self._obs_size, dtype=np.float32)
-            if vec.shape[0] != self._obs_size:
-                padded = np.zeros(self._obs_size, dtype=np.float32)
-                padded[: min(self._obs_size, vec.shape[0])] = vec[: self._obs_size]
-                vec = padded
-            out.append(vec)
-        return out
-
-    def _extract_state(self, observations):
-        state_fn = getattr(self._env, "state", None)
-        if callable(state_fn):
-            try:
-                raw = state_fn()
-                if raw is not None:
-                    return np.asarray(raw, dtype=np.float32).reshape(-1)
-            except Exception:
-                pass
-        return np.concatenate(self._obs_list(observations), axis=0).astype(np.float32)
-
-    def _cache(self, observations):
-        self._obs = self._obs_list(observations)
-        self._state = self._extract_state(observations)
-
-    def _to_int_actions(self, actions):
-        if torch.is_tensor(actions):
-            actions = actions.detach().cpu().numpy()
-        return [int(a) for a in np.asarray(actions).reshape(-1)]
+    def reset(self, seed=None, options=None):
+        obs, info = self._env.reset(
+            seed=self._pending_seed if seed is None else seed, options=options,
+        )
+        self._pending_seed = None
+        self._episode_t = 0
+        self._set_obs(obs)
+        return self.get_obs(), info
 
     def step(self, actions):
-        ints = self._to_int_actions(actions)
-        if len(ints) != self.n_agents:
-            raise ValueError(f"Expected {self.n_agents} actions, got {len(ints)}")
+        if torch.is_tensor(actions):
+            actions = actions.detach().cpu().numpy()
+        actions = np.asarray(actions).reshape(-1)
+        if not self._env.agents:
+            raise RuntimeError("Episode has ended; call reset() before step()")
+        if len(actions) != self.n_agents:
+            raise ValueError(f"Expected {self.n_agents} actions, got {len(actions)}")
         action_dict = {}
-        live = set(self._env.agents)
-        for agent, action in zip(self.agent_ids, ints):
-            if agent not in live:
-                continue
-            n = self._action_n[agent]
-            action_dict[agent] = int(np.clip(action, 0, n - 1))
-        if action_dict:
-            observations, rewards, terminations, truncations, infos = self._env.step(
-                action_dict
-            )
-        else:
-            observations, rewards, terminations, truncations, infos = {}, {}, {}, {}, {}
+        for agent, action, size in zip(self.agents, actions, self._action_sizes):
+            value = int(action)
+            if value != action or not 0 <= value < size:
+                raise ValueError(f"Invalid action {action} for {agent} (Discrete({size}))")
+            action_dict[agent] = value
+        obs, rewards, terminations, truncations, _ = self._env.step(action_dict)
         self._episode_t += 1
-        if observations:
-            self._cache(observations)
-
-        terminated = bool(terminations) and all(
-            bool(terminations.get(agent, True)) for agent in self.agent_ids
-        )
-        env_truncated = bool(truncations) and all(
-            bool(truncations.get(agent, True)) for agent in self.agent_ids
-        )
-        truncated = bool(env_truncated or self._episode_t >= self.episode_limit)
-        info = {}
-        # Do not set info["episode_limit"]. EpisodeRunner stores
-        # terminated != episode_limit; SMAC default (continuing_episode=False)
-        # and gymma TimeLimit both treat timeout as a true terminal so QMIX
-        # does not bootstrap. Marking episode_limit here made every 25-step
-        # MPE episode an infinite-horizon backup and the mixer Q exploded.
-        if isinstance(infos, Mapping):
-            for agent, payload in infos.items():
-                if isinstance(payload, Mapping):
-                    for key, value in payload.items():
-                        info[f"{agent}_{key}"] = value
-
-        agent_rewards = np.asarray(
-            [float(rewards.get(agent, 0.0)) for agent in self.agent_ids],
-            dtype=np.float32,
-        )
+        self._set_obs(obs)
+        terminated = all(terminations[a] for a in self.agents)
+        ended = all(terminations[a] or truncations[a] for a in self.agents)
+        truncated = ended and not terminated
+        if not ended and set(self._env.agents) != set(self.agents):
+            raise RuntimeError("MPEWrapper requires a fixed team until episode end")
+        reward = np.asarray([rewards[a] for a in self.agents], dtype=np.float32)
         if self.common_reward:
-            reward = self._agg(agent_rewards)
-        else:
-            if agent_rewards.size == 1:
-                warnings.warn(
-                    "common_reward is False but received a single agent reward, "
-                    "returning reward as is"
-                )
-            reward = agent_rewards
-        return self.get_obs(), reward, terminated, truncated, info
+            reward = float(reward.sum() if self.reward_scalarisation == "sum" else reward.mean())
+        # Runners use this flag to bootstrap time-limit transitions.
+        return self.get_obs(), reward, terminated, truncated, {"episode_limit": truncated}
 
     def get_obs(self):
-        return [np.array(obs, copy=True) for obs in self._obs]
+        return [obs.copy() for obs in self._obs]
 
     def get_obs_agent(self, agent_id):
-        return np.array(self._obs[agent_id], copy=True)
+        return self._obs[agent_id].copy()
 
     def get_obs_size(self):
         return self._obs_size
 
     def get_state(self):
-        return np.array(self._state, copy=True)
+        return np.concatenate(self._obs).astype(np.float32)
 
     def get_state_size(self):
-        return self._state_size
+        return self.n_agents * self._obs_size
 
     def get_avail_actions(self):
         return [self.get_avail_agent_actions(i) for i in range(self.n_agents)]
 
     def get_avail_agent_actions(self, agent_id):
-        n = self._action_n[self.agent_ids[agent_id]]
-        return [1] * n + [0] * (self._n_actions - n)
+        size = self._action_sizes[agent_id]
+        return [1] * size + [0] * (self._n_actions - size)
 
     def get_total_actions(self):
         return self._n_actions
 
     @property
     def episode_timestep(self):
-        """Same clock DelayedObservationWrapper uses on SMAC (`_episode_steps`)."""
+        """Clock used by the local delayed-observation wrapper."""
         return self._episode_t
 
-    def reset(self, seed=None, options=None):
-        del options
-        # Match gymma/SMAC: only reseed when the caller passes seed.
-        # Passing the constructor seed on every reset() made every episode
-        # start from the same landmark layout (test_return_std stayed 0).
-        reset_kwargs = {}
-        if seed is not None:
-            self._seed = seed
-            reset_kwargs["seed"] = int(seed)
-        observations, infos = self._env.reset(**reset_kwargs)
-        self._episode_t = 0
-        self._cache(observations)
-        info = {}
-        if isinstance(infos, Mapping):
-            for agent, payload in infos.items():
-                if isinstance(payload, Mapping):
-                    for key, value in payload.items():
-                        info[f"{agent}_{key}"] = value
-        return self.get_obs(), info
+    def seed(self, seed=None):
+        self._pending_seed = seed
+        return [seed]
 
     def render(self):
         return self._env.render()
 
     def close(self):
-        return self._env.close()
-
-    def seed(self, seed=None):
-        if seed is not None:
-            self._seed = seed
-            self.reset(seed=seed)
-        return self._seed
+        self._env.close()
 
     def save_replay(self):
-        pass
+        raise NotImplementedError("MPE replay export is unavailable; use render_mode='rgb_array'")

@@ -1,9 +1,14 @@
 env: "delayed_mpe"
+common_reward: True
+reward_scalarisation: "mean"
 
 env_args:
   scenario: "simple_spread_v3"
+  map_name: null
   time_limit: 25
   seed: null
+  render_mode: null
+  scenario_args: {}
   # Delay only local observations. State and available actions remain fresh.
   # Training is always zero-delay (DelayModel); evaluation uses these values.
   delay_type: "gaussian"  # uniform or gaussian (fixed d is N(d, 0))
