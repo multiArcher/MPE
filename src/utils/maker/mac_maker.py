@@ -32,6 +32,11 @@ class MACMaker(Maker):
         return NMAC(*args, **kwargs)
 
     @staticmethod
+    def make_maic_mac(*args, **kwargs) -> MAC:
+        from controllers.maic_controller import MAICMAC
+        return MAICMAC(*args, **kwargs)
+
+    @staticmethod
     def make_entity_maic_mac(*args, **kwargs) -> MAC:
         from controllers.entity_maic_controller import EntityMAICMAC
         return EntityMAICMAC(*args, **kwargs)

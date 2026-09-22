@@ -51,6 +51,12 @@ class AgentMaker(Maker):
         return EntityFeatureAttnRNNAgent(*args, **kwargs)
 
     @staticmethod
+    def make_maic(*args, **kwargs) -> Agent:
+        """Official MAIC agent (flat observation, incentive messages)."""
+        from modules.agents.maic_agent import MAICAgent
+        return MAICAgent(*args, **kwargs)
+
+    @staticmethod
     def make_entity_maic(*args, **kwargs) -> Agent:
         """MAIC agent with entity scheme."""
         from modules.agents.entity_maic_agent import EntityMAICAgent
