@@ -1,7 +1,7 @@
 lbforaging
 rware
 pettingzoo
-mpe2
+mpe2>=1.1.1,<2
 git+https://github.com/uoe-agents/matrix-games.git
 git+https://github.com/uoe-agents/smaclite.git
 pysc2==3.0.0

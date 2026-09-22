@@ -1,26 +1,25 @@
-env: "delayed_mpe"
+env: delayed_mpe
 common_reward: True
-reward_scalarisation: "mean"
+reward_scalarisation: mean
 
 env_args:
-  scenario: "simple_spread_v3"
-  map_name: null
+  map_name: simple_spread_v3
+  scenario: null  # Alias of map_name. If set (including via CLI), it selects the map.
+  bootstrap_at_timeout: False  # True restores VIL2C Q-bootstrap; explodes QMIX on MPE.
   time_limit: 25
   seed: null
   render_mode: null
   scenario_args: {}
-  # Delay only local observations. State and available actions remain fresh.
-  # Training is always zero-delay (DelayModel); evaluation uses these values.
-  delay_type: "gaussian"  # uniform or gaussian (fixed d is N(d, 0))
+  delay_type: gaussian
   delay_mean: 1.0
   delay_std: 1.0
-  max_delay: 4
+  max_delay: 2
   delay_per_agent: True
 
 test_greedy: True
 test_nepisode: 32
-test_interval: 50000
-log_interval: 50000
+test_interval: 10000
+log_interval: 10000
 runner_log_interval: 10000
 learner_log_interval: 10000
-t_max: 2050000
+t_max: 2000000

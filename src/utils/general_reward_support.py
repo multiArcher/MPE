@@ -6,8 +6,8 @@ def test_alg_config_supports_reward(config):
         # all algorithms support common reward
         return True
     else:
-        if config["learner"] == "coma_learner" or config["learner"] == "qtran_learner":
-            # COMA and QTRAN only support common reward
+        if config["learner"] in ("coma_learner", "qtran_learner", "maic_learner"):
+            # COMA, QTRAN and MAIC only support common reward
             return False
         elif config["learner"] == "q_learner" and (
             config["mixer"] == "vdn" or config["mixer"] == "qmix"

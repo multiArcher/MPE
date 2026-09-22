@@ -152,13 +152,18 @@ if __name__ == "__main__":
     config_dict = recursive_dict_update(config_dict, env_config)
     config_dict = recursive_dict_update(config_dict, alg_config)
 
-    # Sacred rejects new nested keys unless registered before add_config.
-    if config_dict.get("env") in {"mpe", "delayed_mpe"}:
-        scenario_args = config_dict["env_args"].setdefault("scenario_args", {})
+    # Scenario kwargs differ across MPE tasks. Register explicitly supplied keys
+    # before Sacred validates updates; Sacred still parses their actual values.
+    if config_dict["env"] in ("mpe", "delayed_mpe"):
+        prefix = "env_args.scenario_args."
         for param in params:
-            if param.startswith("env_args.scenario_args.") and "=" in param:
-                key, value = param.split("=", 1)
-                scenario_args[key.removeprefix("env_args.scenario_args.")] = yaml.safe_load(value)
+            key, separator, _ = param.partition("=")
+            if separator and key.startswith(prefix):
+                scenario_key = key[len(prefix):]
+                if not scenario_key.isidentifier():
+                    raise ValueError(f"Invalid MPE scenario parameter: {scenario_key}")
+                config_dict["env_args"].setdefault("scenario_args", {})
+                config_dict["env_args"]["scenario_args"].setdefault(scenario_key, None)
 
     # endregion
 
@@ -166,10 +171,10 @@ if __name__ == "__main__":
     env_args = config_dict["env_args"]
     if env_args.get("map_name"):
         map_name = env_args["map_name"]
-    elif env_args.get("key"):
-        map_name = env_args["key"]
     elif env_args.get("scenario"):
         map_name = env_args["scenario"]
+    elif env_args.get("key"):
+        map_name = env_args["key"]
     else:
         map_name = config_dict.get("env", "env")
 
@@ -178,12 +183,12 @@ if __name__ == "__main__":
 
     # Update map name and experiment name from command line parameters.
     for param in params:
-        if param.startswith("env_args.map_name"):
-            map_name = param.split("=")[1]
-        elif param.startswith("env_args.key"):
-            map_name = param.split("=")[1]
+        if param.startswith("env_args.map_name="):
+            map_name = param.split("=", 1)[1]
         elif param.startswith("env_args.scenario="):
-            map_name = param.split("=")[1]
+            map_name = param.split("=", 1)[1]
+        elif param.startswith("env_args.key="):
+            map_name = param.split("=", 1)[1]
         elif param.startswith("name"):
             experiment_name = param.split("=")[1]
 

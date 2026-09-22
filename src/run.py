@@ -225,7 +225,8 @@ def run_sequential(args, logger):
         postfix={"ep": 0},
         file=tqdm_output,
     )
-    max_winrate = 0
+    best_score = float("-inf")
+    best_model_path = Path(args.local_results_path) / "models" / args.unique_token / "best_model"
     last_improvement_step = 0
 
     while runner.t_env <= args.t_max:
@@ -261,26 +262,32 @@ def run_sequential(args, logger):
                 runner.run(test_mode=True)
             torch.cuda.empty_cache()
 
-        battle_stats = logger.stats.get("running/test_battle_won_mean") or []
-        if battle_stats:
-            new_winrate = battle_stats[-1][1]
-            best_model = (new_winrate > max_winrate) or (episode == 0)
-        else:
-            # MPE and other non-SMAC envs do not log battle_won.
-            new_winrate = max_winrate
-            best_model = episode == 0
-        
-        if best_model is True:
+        new_score = None
+        metric_key = None
+        for candidate in (
+            "metric/test_battle_won_mean",
+            "running/test_battle_won_mean",
+            "metric/test_return_mean",
+            "metric/test_total_return_mean",
+        ):
+            metric_history = logger.stats.get(candidate)
+            if metric_history:
+                new_score = metric_history[-1][1]
+                metric_key = candidate
+                break
+        best_model = new_score is not None and new_score > best_score
+
+        if best_model:
             model_save_dir = Path(args.local_results_path) / "models" / args.unique_token
             best_model_path = model_save_dir / "best_model"
             best_model_path.mkdir(parents=True, exist_ok=True)
             learner.save_models(best_model_path)
             progress_bar.clear()
             logger.console_logger.info(
-                f"Best model updated, winrate: {max_winrate} -> {new_winrate}"
+                f"Best model updated, {metric_key}: {best_score} -> {new_score}"
             )
             last_improvement_step = runner.t_env
-            max_winrate = new_winrate
+            best_score = new_score
 
             best_model_full_model_path = model_save_dir / "best_model_full_model"
             best_model_full_model_path.mkdir(parents=True, exist_ok=True)
@@ -390,25 +397,14 @@ def args_sanity_check(config, logger):
             "CUDA flag use_cuda was switched OFF automatically because no CUDA device is available!"
         )
 
-    # Preserve the requested MPE parallelism while selecting the runner variant
-    # that matches whether the environment exposes delayed observations.
-    env_name = config.get("env")
-    runner_name = config.get("runner")
-    if env_name == "mpe":
-        runner_mapping = {
-            "delayed_episode": "episode",
-            "delayed_parallel": "parallel",
-        }
-        config["runner"] = runner_mapping.get(runner_name, runner_name)
-    elif env_name == "delayed_mpe":
+    # delayed_mpe needs a delayed runner so train/eval mode reaches the wrapper.
+    # Regular ParallelRunner in this repo does not set env.training.
+    if config.get("env") == "delayed_mpe":
         runner_mapping = {
             "episode": "delayed_episode",
             "parallel": "delayed_parallel",
         }
-        config["runner"] = runner_mapping.get(runner_name, runner_name)
-
-    if config.get("runner") in {"episode", "delayed_episode"}:
-        config["batch_size_run"] = 1
+        config["runner"] = runner_mapping.get(config.get("runner"), config.get("runner"))
 
     # Adjust batch_size_run and test_nepisode to be divisible by batch_size_run.
     if config["test_nepisode"] < config["batch_size_run"]:
