@@ -26,7 +26,7 @@ def test_matches_native_rewards_and_final_observation(map_name):
             actions = [0] * env.n_agents
             obs, reward, term, trunc, info = env.step(actions)
             expected, rewards, _, _, _ = native.step(dict(zip(env.agents, actions)))
-            assert reward == pytest.approx(np.sum(list(rewards.values())))
+            assert reward == pytest.approx(np.mean(list(rewards.values())))
             assert not term
             assert trunc == (t == 2)
             assert not info.get("episode_limit", False)

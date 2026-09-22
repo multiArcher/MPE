@@ -46,8 +46,8 @@ python src/main.py --config=qmix --env-config=mpe with env_args.map_name=simple_
 全局状态为按固定智能体顺序拼接的补零后即时观测。
 默认 spread 的 `obs_shape=18`、`state_shape=54`、`n_actions=5`。
 
-默认把各智能体奖励求和作为团队奖励；可用 `reward_scalarisation=mean`
-改为平均。支持个体奖励的算法可用 `common_reward=False` 返回奖励向量。
+默认把各智能体奖励取平均作为团队奖励；可用 `reward_scalarisation=sum`
+改为求和。支持个体奖励的算法可用 `common_reward=False` 返回奖励向量。
 对抗场景中把双方奖励聚合会改变任务目标，不能作为标准对抗训练配置使用。
 MPE 最佳模型按评估回报选择；SMAC 仍优先使用胜率。
 

@@ -16,7 +16,7 @@ from .multiagentenv import MultiAgentEnv
 class MPEWrapper(MultiAgentEnv):
     def __init__(
         self, map_name="simple_spread_v3", time_limit=25, seed=None,
-        common_reward=True, reward_scalarisation="sum", scenario_args=None,
+        common_reward=True, reward_scalarisation="mean", scenario_args=None,
         render_mode=None, args=None, scenario=None, bootstrap_at_timeout=False,
         # These SMAC defaults are merged into every environment by main.py.
         window_size_x=None, window_size_y=None, state_timestep_number=False,

@@ -1,6 +1,6 @@
 env: mpe
 common_reward: True
-reward_scalarisation: sum
+reward_scalarisation: mean
 
 env_args:
   map_name: simple_spread_v3
