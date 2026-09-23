@@ -1,6 +1,6 @@
 env: delayed_mpe
 common_reward: True
-reward_scalarisation: mean
+reward_scalarisation: sum
 
 env_args:
   map_name: simple_spread_v3

@@ -10,6 +10,13 @@ import pandas as pd
 from matplotlib.ticker import PercentFormatter
 
 
+def uses_return(data):
+    """MPE reports return; SMAC reports win rate."""
+    if "env" not in data.columns or data.empty:
+        return False
+    return set(data["env"].dropna()) <= {"mpe", "delayed_mpe"}
+
+
 def percent_axis(ax):
     ax.set_ylim(0, 1)
     ax.yaxis.set_major_formatter(PercentFormatter(1))
