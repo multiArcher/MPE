@@ -58,7 +58,8 @@ def main(root):
                 job = json.loads((directory / "job.json").read_text())
                 config = json.loads((directory / "effective_config.json").read_text())
                 metadata = dict(model_id=model.name, condition_id=condition_dir.name,
-                                map=config["env_args"]["map_name"],
+                                env=config.get("env"),
+                                map=config["env_args"].get("scenario") or config["env_args"]["map_name"],
                                 train_seed=config.get("seed"),
                                 generation_horizon=config.get("bcrbc_generation_horizon"),
                                 flow_steps=config.get("bcrbc_flow_steps"))
@@ -88,10 +89,10 @@ def main(root):
                                        "mask_obs_mse", "agreement", "q_softmax_kl", "reference_q_gap"):
                             aggregate[metric + "_sum"] += row[metric]
             n = len(rows)
-            wins = sum(r["won"] for r in rows)
-            p, z = wins / n, 1.96
-            center = (p + z*z/(2*n)) / (1 + z*z/n)
-            radius = z * math.sqrt(p*(1-p)/n + z*z/(4*n*n)) / (1 + z*z/n)
+            returns = np.asarray([r["episode_return"] for r in rows], dtype=float)
+            return_mean = float(returns.mean())
+            return_std = float(returns.std(ddof=1)) if n > 1 else None
+            mpe = config.get("env") in ("mpe", "delayed_mpe")
             packet_count = sum(packets.values())
             mean = sum(d*c for d, c in packets.items()) / packet_count
             variance = sum((d-mean)**2*c for d, c in packets.items()) / packet_count
@@ -108,8 +109,7 @@ def main(root):
                 family = "fixed"
             record = dict(**metadata, distribution=family,
                           condition=json.dumps(job["condition"]), episodes=n,
-                          win_rate=p, win_low=center-radius, win_high=center+radius,
-                          return_mean=np.mean([r["episode_return"] for r in rows]),
+                          return_mean=return_mean, return_std=return_std,
                           length_mean=np.mean([r["length"] for r in rows]),
                           reference_obs_all_mse=sum(r["reference_obs_all_mse"]*r["sample_count"] for r in rows)/sample_count,
                           decision_count=sum(r["decision_count"] for r in rows),
@@ -123,6 +123,12 @@ def main(root):
                           hardware=" / ".join(sorted({r.get("device_name", "unknown") for r in timing})),
                           episodes_per_second=n/sum(r["seconds"] for r in timing),
                           diagnostic_inclusive_peak_gib=max(r["diagnostic_inclusive_peak_bytes"] for r in timing)/1024**3)
+            if not mpe:
+                wins = sum(r["won"] for r in rows)
+                p, z = wins / n, 1.96
+                center = (p + z * z / (2 * n)) / (1 + z * z / n)
+                radius = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / (1 + z * z / n)
+                record.update(win_rate=p, win_low=center - radius, win_high=center + radius)
             for metric in ("dead_allies", "dead_enemies"):
                 values = [r[metric] for r in rows if r.get(metric) is not None]
                 record[metric + "_mean"] = np.mean(values) if values else None
@@ -132,8 +138,10 @@ def main(root):
                     record[metric], record[metric+"_low"], record[metric+"_high"] = ratio_interval(rows, metric)
             summary.append(record)
     baselines = {(r["map"], r["model_id"]): r["win_rate"] for r in summary
-                 if r["condition_id"] == "fixed_0"}
+                 if r["condition_id"] == "fixed_0" and "win_rate" in r}
     for row in summary:
+        if "win_rate" not in row:
+            continue
         baseline = baselines.get((row["map"], row["model_id"]))
         row["win_drop_from_no_delay"] = None if baseline is None else baseline - row["win_rate"]
     write_csv(tables / "summary.csv", summary)

@@ -15,9 +15,14 @@ STUDY = "delay_robustness"
 # For a legacy config missing bcrbc_time_block_every, explicitly supply
 # legacy_time_block_every=4 in that model entry; never change the method.
 MODELS = []
+# SMAC grid. MPE uses the preset below and does not read these values.
 MEANS = [-2, -1, 0, 1, 2]
 STDS = [0, 0.5, 1, 1.5, 2]
 CAP = 8
+MPE_MEANS = [-2, 0, 2, 4, 6, 8, 10]
+MPE_STDS = [0, 2, 4, 6, 8]
+MPE_CAP = 16
+MPE_FIXED = [0, 1, 2, 4, 6, 8, 10, 12, 14, 16]
 EPISODES = 64
 PARALLEL = 8
 SEED = 101
@@ -26,19 +31,45 @@ MASK_INTERVENTION = False
 FEATURE_GROUPS = {}
 
 
-def conditions():
-    cases = [{"id": "fixed_0", "kind": "fixed", "value": 0, "cap": CAP}]
+def conditions(profile="smac"):
+    if profile == "smac":
+        means, stds, cap, extra_fixed = MEANS, STDS, CAP, (4, 8)
+        specials = [
+            dict(id="mixture_balanced", kind="mixture", means=[0, 2], stds=[1, 1],
+                 high_probability=0.5, cap=cap),
+            dict(id="mixture_rare_severe", kind="mixture", means=[0, 4], stds=[1, 1],
+                 high_probability=0.1, cap=cap),
+            dict(id="periodic_16", kind="periodic", means=[0, 2], stds=[1, 1], period=16, cap=cap),
+            dict(id="markov_09", kind="markov", means=[0, 2], stds=[1, 1], stay_probability=0.9, cap=cap),
+        ]
+    elif profile == "mpe":
+        means, stds, cap, extra_fixed = MPE_MEANS, MPE_STDS, MPE_CAP, MPE_FIXED
+        specials = [
+            dict(id="mixture_balanced", kind="mixture", means=[0, 4], stds=[4, 4],
+                 high_probability=0.5, cap=cap),
+            dict(id="mixture_rare_severe", kind="mixture", means=[0, 8], stds=[4, 4],
+                 high_probability=0.1, cap=cap),
+            dict(id="periodic_16", kind="periodic", means=[0, 4], stds=[4, 4], period=16, cap=cap),
+            dict(id="markov_09", kind="markov", means=[0, 4], stds=[2, 4], stay_probability=0.9, cap=cap),
+        ]
+    else:
+        raise ValueError(f"Unknown delay profile: {profile}")
+    return _grid(means, stds, cap, extra_fixed, specials)
+
+
+def _grid(means, stds, cap, extra_fixed, specials):
+    cases = [{"id": "fixed_0", "kind": "fixed", "value": 0, "cap": cap}]
     cells = {"gaussian": [], "uniform": []}
     for family in cells:
-        for mean in MEANS:
-            for std in STDS:
+        for mean in means:
+            for std in stds:
                 if std == 0:
-                    value = min(CAP, math.ceil(max(0, mean)))
+                    value = min(cap, math.ceil(max(0, mean)))
                     name = f"fixed_{value}"
-                    condition = dict(id=name, kind="fixed", value=value, cap=CAP)
+                    condition = dict(id=name, kind="fixed", value=value, cap=cap)
                 else:
                     name = f"{family}_{mean:g}_{std:g}"
-                    condition = dict(id=name, kind=family, mean=mean, std=std, cap=CAP)
+                    condition = dict(id=name, kind=family, mean=mean, std=std, cap=cap)
                     if family == "uniform":
                         # Match the Gaussian's raw standard deviation.
                         width = math.sqrt(12) * std
@@ -47,14 +78,21 @@ def conditions():
                 cells[family].append(dict(mean=mean, std=std, condition_id=name))
                 if not any(case["id"] == name for case in cases):
                     cases.append(condition)
-    for value in (4, 8):
-        cases.append(dict(id=f"fixed_{value}", kind="fixed", value=value, cap=CAP))
-    for name, means, probability in [("balanced", [0, 2], 0.5), ("rare_severe", [0, 4], 0.1)]:
-        cases.append(dict(id=f"mixture_{name}", kind="mixture", means=means,
-                          stds=[1, 1], high_probability=probability, cap=CAP))
-    cases.append(dict(id="periodic_16", kind="periodic", means=[0, 2], stds=[1, 1], period=16, cap=CAP))
-    cases.append(dict(id="markov_09", kind="markov", means=[0, 2], stds=[1, 1], stay_probability=0.9, cap=CAP))
+    for value in extra_fixed:
+        name = f"fixed_{value}"
+        if not any(case["id"] == name for case in cases):
+            cases.append(dict(id=name, kind="fixed", value=value, cap=cap))
+    cases.extend(specials)
     return cases, cells
+
+
+def delay_profile(config):
+    env = config.get("env")
+    if env in ("mpe", "delayed_mpe"):
+        return "mpe"
+    if env in ("sc2", "delayed_sc2"):
+        return "smac"
+    raise ValueError(f"Delay study supports sc2 and mpe, got env={env}")
 
 
 def digest(path):
@@ -66,7 +104,12 @@ def main():
     assert len({m["id"] for m in MODELS}) == len(MODELS), "Model IDs must be unique."
     output = ROOT / "results/evaluate" / STUDY
     output.mkdir(parents=True, exist_ok=True)
-    cases, cells = conditions()
+    profiles = {delay_profile(json.loads((ROOT / model["config"]).read_text())) for model in MODELS}
+    if len(profiles) != 1:
+        raise ValueError("One study must be entirely SMAC or entirely MPE")
+    profile = profiles.pop()
+    print(f"Delay profile: {profile}", flush=True)
+    cases, cells = conditions(profile)
     source_files = sorted((ROOT / "src/modules/bcrbc").rglob("*.py"))
     source_files += sorted((ROOT / "scripts/eval_scripts").glob("*.py"))
     source_files += [ROOT / p for p in (

@@ -16,17 +16,23 @@ def evaluate_batch(job_path, runner=None):
     sys.path.insert(0, str(ROOT / "src"))
     from components.episode_buffer import EpisodeBatch
     from components.transforms import OneHot
-    from controllers.bcrbc_mac import BCRBCMAC
     from runners.delayed_parallel_runner import DelayedParallelRunner
     from run import parse_buffer_scheme
+    from utils.maker.mac_maker import MACMaker
     from evaluate_bcrbc import EvaluationLogger
-    from study_diagnostics import StudyDiagnostics
+    from study_diagnostics import ReturnDiagnostics, StudyDiagnostics
 
     job = json.loads(job_path.read_text())
     config = json.loads(Path(job["config"]).read_text())
-    if "bcrbc_time_block_every" not in config:
+    is_bcrbc = config.get("mac", "bcrbc_mac") == "bcrbc_mac"
+    if is_bcrbc and "bcrbc_time_block_every" not in config:
         config["bcrbc_time_block_every"] = job["model"]["legacy_time_block_every"]
     # Preserve all architecture and completion settings from the training run.
+    # Training is no-delay; this evaluation applies the study condition in the wrapper.
+    if config.get("env") == "mpe":
+        config["env"] = "delayed_mpe"
+    elif config.get("env") == "sc2":
+        config["env"] = "delayed_sc2"
     config.update(batch_size_run=job["parallel"], test_nepisode=job["parallel"],
                   runner="delayed_parallel", render=False, evaluation_epsilon=0.0)
     config["env_args"].update(seed=job["seed"], max_delay=job["condition"]["cap"])
@@ -55,17 +61,18 @@ def evaluate_batch(job_path, runner=None):
     groups = {"agents": args.n_agents}
     preprocess = {"actions": ("actions_onehot", [OneHot(args.n_actions)])}
     template = EpisodeBatch(scheme, groups, 1, 1, preprocess=preprocess)
-    mac = BCRBCMAC(template.scheme, groups, args).to(args.device)
+    mac = MACMaker.make(config.get("mac", "bcrbc_mac"), template.scheme, groups, args).to(args.device)
     mac.load_models(job["checkpoint"])
     print("  Model loaded; resetting environments and running episodes...",
           file=sys.__stdout__, flush=True)
-    # Capture actual policy output, never re-sample the executed branch for scoring.
-    forward = mac.forward
-    def capture(*values, **keywords):
-        result = forward(*values, **keywords)
-        mac.decision_z = result["z"].detach()
-        return result
-    mac.forward = capture
+    # BCRBC scoring reads the latent from the executed forward, without a second sample.
+    if is_bcrbc:
+        forward = mac.forward
+        def capture(*values, **keywords):
+            result = forward(*values, **keywords)
+            mac.decision_z = result["z"].detach()
+            return result
+        mac.forward = capture
     select = mac.select_actions
     last_progress = time.perf_counter()
     def timed_select(*values, **keywords):
@@ -85,8 +92,11 @@ def evaluate_batch(job_path, runner=None):
         return actions
     mac.select_actions = timed_select
     runner.setup(scheme, groups, preprocess, mac)
-    runner.diagnostics = StudyDiagnostics(job_path.parent, job["parallel"],
-                                         job["episode_offset"], job["mask_intervention"], job["feature_groups"])
+    if is_bcrbc:
+        runner.diagnostics = StudyDiagnostics(job_path.parent, job["parallel"],
+                                             job["episode_offset"], job["mask_intervention"], job["feature_groups"])
+    else:
+        runner.diagnostics = ReturnDiagnostics(job_path.parent, job["parallel"], job["episode_offset"])
     if args.use_cuda:
         torch.cuda.reset_peak_memory_stats()
     start = time.perf_counter()
@@ -110,7 +120,8 @@ def evaluate_batch(job_path, runner=None):
         row.update(dead_allies=info.get("dead_allies"), dead_enemies=info.get("dead_enemies"))
     episode_path.write_text("".join(json.dumps(row) + "\n" for row in rows))
     # Only environment workers persist; release batch-local models and caches.
-    del mac.forward
+    if is_bcrbc:
+        del mac.forward
     del mac.select_actions
     runner.mac = None
     runner.diagnostics = None
@@ -169,13 +180,20 @@ def main(job_path):
                 result = json.loads((path.parent / "result.json").read_text())
                 rows = [json.loads(line) for line in
                         (path.parent / "episodes.jsonl").read_text().splitlines()]
-                win_rate = sum(row["won"] for row in rows) / len(rows)
+                config = json.loads(Path(job["config"]).read_text())
+                if config.get("env") in ("mpe", "delayed_mpe"):
+                    returns = [row["episode_return"] for row in rows]
+                    mean = sum(returns) / len(returns)
+                    variance = sum((value - mean) ** 2 for value in returns) / (len(returns) - 1) if len(returns) > 1 else 0
+                    score = f"return={mean:.3f}±{variance ** 0.5:.3f}"
+                else:
+                    score = f"win={sum(row['won'] for row in rows) / len(rows):.1%}"
                 completed += 1
                 elapsed = time.perf_counter() - started
                 remaining = elapsed / completed * (total - completed)
                 print(
                     f"  Done {completed}/{total} ({completed / total:.1%}) | "
-                    f"win={win_rate:.1%} | rollout={result['seconds']:.1f}s | "
+                    f"{score} | rollout={result['seconds']:.1f}s | "
                     f"elapsed={elapsed / 60:.1f}min | ETA~{remaining / 60:.1f}min",
                     flush=True,
                 )

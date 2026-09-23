@@ -7,6 +7,8 @@ def main():
     metrics += [m for m in ("intervention_agreement", "correction", "damage") if m in data]
     for map_name, rows in data.groupby("map"):
         for metric in metrics:
+            if metric not in rows:
+                continue
             fig, ax = plt.subplots()
             for family, group in rows.groupby("distribution"):
                 ax.errorbar(group.sampled_delay_mean, group[metric],

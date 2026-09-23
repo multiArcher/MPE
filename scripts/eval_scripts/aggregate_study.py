@@ -14,10 +14,14 @@ def main(root):
     excluded = {"train_seed", "generation_horizon", "flow_steps"}
     metrics = [key for key in data.select_dtypes("number")
                if key not in excluded and not key.endswith(("_low", "_high"))]
-    result = aggregate_runs(data, ["map", "condition_id", "distribution"], metrics)
+    group = ["env", "map", "condition_id", "distribution"]
+    group = [key for key in group if key in data.columns]
+    result = aggregate_runs(data, group, metrics)
     result.to_csv(tables / "run_summary.csv", index=False)
-    efficiency = aggregate_runs(data, ["map", "condition_id", "hardware"],
-                                ["decision_ms", "win_rate"])
+    efficiency_metrics = [key for key in ("decision_ms", "win_rate", "return_mean", "return_std")
+                          if key in data.columns]
+    efficiency = aggregate_runs(data, [key for key in ("env", "map", "condition_id", "hardware") if key in data.columns],
+                                efficiency_metrics)
     efficiency.to_csv(tables / "run_efficiency.csv", index=False)
     bucket_path = tables / "quality_buckets.csv"
     if bucket_path.stat().st_size:

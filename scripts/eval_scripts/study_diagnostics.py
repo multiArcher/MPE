@@ -127,3 +127,55 @@ class StudyDiagnostics:
 
     def log(self, logger, t_env):
         pass
+
+
+class ReturnDiagnostics:
+    """Episode return and packet-delay records for controllers without BCRBC latents."""
+
+    def __init__(self, directory, batch_size, offset):
+        self.directory = directory
+        self.offset = offset
+        self.rows = [[] for _ in range(batch_size)]
+        self.histograms = [{} for _ in range(batch_size)]
+        self.clipped = [0 for _ in range(batch_size)]
+        self.decisions = gzip.open(directory / "decisions.jsonl.gz", "wt", encoding="utf-8")
+
+    @torch.no_grad()
+    def record(self, runner, active):
+        if not active:
+            return
+        step = runner.t
+        data = runner.get_diagnostic_data(active)
+        generation_time = runner.batch["obs_gen_t"][:, step, :, 0]
+        missing = generation_time < step
+        decision_ms = float(getattr(runner.mac, "decision_ms", 0.0))
+        for row_index, env_index in enumerate(active):
+            self.clipped[env_index] += data[row_index]["clipped_count"]
+            for delay in data[row_index]["sampled_delays"]:
+                key = str(int(delay))
+                self.histograms[env_index][key] = self.histograms[env_index].get(key, 0) + 1
+            for agent in range(runner.mac.n_agents):
+                gen = int(generation_time[env_index, agent])
+                row = dict(episode=self.offset + env_index, step=int(step), agent=agent,
+                           missing=bool(missing[env_index, agent]), never_arrived=gen < 0,
+                           age=None if gen < 0 else int(step - gen), eligible=False,
+                           regime=data[row_index]["regime"], regime_age=data[row_index]["regime_age"],
+                           decision_ms=decision_ms)
+                self.decisions.write(json.dumps(row) + "\n")
+                self.rows[env_index].append(row)
+
+    def finish(self, returns, lengths, wins):
+        self.decisions.close()
+        with (self.directory / "episodes.jsonl").open("w", encoding="utf-8") as stream:
+            for index, rows in enumerate(self.rows):
+                record = dict(episode=self.offset + index, won=bool(wins[index]),
+                              episode_return=float(returns[index]), length=int(lengths[index]),
+                              decision_count=0, sample_count=len(rows),
+                              missing_count=sum(row["missing"] for row in rows),
+                              never_arrived_count=sum(row["never_arrived"] for row in rows),
+                              reference_obs_all_mse=0.0, clipped_count=self.clipped[index],
+                              delay_histogram=self.histograms[index])
+                stream.write(json.dumps(record) + "\n")
+
+    def log(self, logger, t_env):
+        pass
