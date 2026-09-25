@@ -9,7 +9,7 @@ id用于标识run；不同算法分别建立研究目录，不在此处自动混
 只有一个有效run时标准差为空、图中不画波动带，缺失值不补零。
 
 训练日志默认读取各条目config所在目录的metrics.json。
-可在模型条目添加tensorboard="results/tb_logs/<run>"指定事件文件目录。
+可在模型条目添加tensorboard="results/tb_logs/<run></run>"指定事件文件目录。
 Sacred优先，TensorBoard只补充Sacred未记录的指标，不拼接同指标的两份序列。
 训练日志的step按本项目日志约定为环境交互步数；导入外部算法需先确认其含义。
 重复step保留最后一条；不同run按共同覆盖区间的记录步数并集线性插值，不外推。
@@ -18,6 +18,7 @@ Sacred优先，TensorBoard只补充Sacred未记录的指标，不拼接同指标
 这些曲线来自训练日志，与训练完成后的延迟扫描结果分开。
 
 新增表格：
+
 - run_summary.csv：各延迟条件的跨run均值、标准差和有效run数。
 - quality_per_run.csv、run_quality.csv：重建/动作分桶的单run与跨run统计。
 - dynamic_per_run.csv、run_dynamic.csv：连续环境时间步的单run与跨run统计。

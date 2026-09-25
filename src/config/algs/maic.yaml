@@ -8,7 +8,7 @@ runner: "episode"
 batch_size_run: 1
 buffer_size: 5000
 batch_size: 32
-buffer_cpu_only: True
+buffer_cpu_only: False
 action_selector: "epsilon_greedy"
 epsilon_start: 1.0
 epsilon_finish: 0.05
@@ -51,4 +51,4 @@ obs_gaussian_delay_mean: 0.0
 obs_gaussian_delay_std: 0.0
 obs_delay_discretization: round
 test_nepisode: 32
-t_max: 2050000
+t_max: 10050000
